@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+**/.DS_Store
+._*
+**/._*
+
+# Office lockfiles
+~$*
+
+# R
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+*.Rapp.history
+*_cache/
+*_files/
+.quarto/
+
+# Editor and secrets
+*.tmp
+*.swp
+.env
+.env.*
+
+# Instructor prompt stays on each machine
+Project2Details2026.docx
+
+# Local agent rules
+AGENTS.md

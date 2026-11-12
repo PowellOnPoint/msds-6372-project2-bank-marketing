@@ -1,0 +1,5 @@
+* text=auto
+
+# Keep the UCI extracts as published
+*.csv -text
+Data/*.txt -text
