@@ -105,7 +105,7 @@ Monday, 6 December 2026. Record and submit.
 3. Read an extract with the semicolon separator. From `Dev/` or `Docs/`:
 
 ```r
-bank <- read.csv("../Data/bank-additional-full.csv", sep = ";")
+bank <- read.csv("../Data/<file>.csv", sep = ";")
 ```
 
 Categorical columns arrive as character vectors under R 4.0 and later. Convert a column to a factor when the model requires a factor.
