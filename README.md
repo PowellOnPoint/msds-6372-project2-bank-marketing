@@ -17,6 +17,7 @@ Project 2/
 │   ├── bank-additional.csv            # 4,119 rows; 10% sample of bank-additional-full.csv
 │   └── bank-additional-names.txt
 ├── Dev/                               # drafts
+│   └── Cleaning.rmd                   # Step 1
 ├── Docs/                              # pre-production writeups; prompt is local only
 ├── README.md
 └── msds-6372-project2-bank.Rproj
@@ -69,7 +70,7 @@ Categorical columns arrive as character vectors under R 4.0 and later. Convert a
 ## Authors
 
 - Aaron Powell – MSDS Candidate, Southern Methodist University (`PowellOnPoint`)
-- Isabella Westlauer – MSDS Candidate, Southern Methodist University (`AST-Isabella`)
+- Isabella Westlauer – MSDS Candidate, Southern Methodist University (`Iwestlauer`)
 
 ## Acknowledgments
 

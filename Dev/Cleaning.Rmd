@@ -1,0 +1,73 @@
+---
+title: "Exploratory Data Analysis"
+subtitle: "MSDS 6372: Jacob Turner"
+author: "Aaron Powell"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Ingest
+Quick review of different files provided. Two main datasets: 
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+bank_add <- read.csv("../Data/bank-additional-full.csv", sep = ";")
+bank_full <- read.csv("../Data/bank-full.csv", sep = ";")
+glimpse(bank_full)
+```
+`Bank-additional-full.csv` has `r dim(bank_full)[1]-dim(bank_add)[1]` fewer rows and additional columns: `r paste(setdiff(names(bank_add), names(bank_full)), collapse = ", ")`. 
+
+Names only in `bank-full.csv`: `r paste(setdiff(names(bank_full), names(bank_add)), collapse = ", ")`.
+
+```{r}
+summary(bank_add %>% mutate(across(where(is.character), as.factor)))
+```
+
+About `r scales::percent(mean(bank_full$y == "yes"), accuracy = 0.1)` of contacts in `bank-full.csv` subscribe. The rate by month is much higher in the months with fewer contacts. Bar labels are contact counts, and each month pools May 2008 through November 2010.
+
+```{r message=FALSE, warning=FALSE, fig.width=8, fig.height=4.5}
+month_levels <- c(
+  "jan", "feb", "mar", "apr", "may", "jun",
+  "jul", "aug", "sep", "oct", "nov", "dec"
+)
+
+bank_full %>%
+  mutate(month = factor(month, levels = month_levels)) %>%
+  group_by(month) %>%
+  summarise(
+    contacts = n(),
+    subscribe_rate = mean(y == "yes"),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(month, subscribe_rate)) +
+  geom_col(fill = "#2c7fb8") +
+  geom_text(aes(label = scales::comma(contacts)), vjust = -0.4, size = 3) +
+  scale_y_continuous(
+    labels = scales::percent,
+    expand = expansion(mult = c(0, 0.18))
+  ) +
+  labs(
+    title = "Subscription rate by contact month",
+    x = NULL,
+    y = "Subscription rate"
+  ) +
+  theme_minimal()
+```
+
+Instead of using a `set.seed()` function, the authors provided samples for both datasets.
+
+Remaining EDA should bring in the additional columns in `Bank-additional-full.csv` if macro economics seem appropriate. Macro is a would-be-nice in objective 1, and only if additional predictive power is found in objective 2.
+
+Suspecting a seasonal trend.
+
+
+
