@@ -125,6 +125,8 @@ ggplot(bank_long, aes(x = Value, fill = y)) +
 
 ## Faceted Bar Charts for Categorical Predictors
 Faceted bar charts for categorical predictors: notice that many predictors have 'unknown' as a category, which may need to be addressed in the cleaning process.
+
+Also notice pdays, which is a numeric predictor but has a large number of 999 values, indicating that the client was not previously contacted. This may need to be treated as a categorical variable or imputed in some way.
 ```{r}
 # Identify categorical predictors
 cat_vars <- bank_add %>%
@@ -164,6 +166,8 @@ ggplot(bank_cat_long, aes(x = Category)) +
 
 ## Boxplots to examine outliers
 Balance, campaign, duration, pdays, and previous are all heavily right-skewed, with many outliers. The boxplots below show the distribution of these numerical predictors by subscription status (`y`).
+
+Important note: the duration attribute highly affects the output target (e.g., if duration=0 then y="no"). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input should **only be included for benchmark purposes** and should be discarded if the intention is to have a realistic predictive model.
 ```{r}
 ggplot(bank_long, aes(x = y, y = Value, fill = y)) +
   geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
