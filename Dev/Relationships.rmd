@@ -1,0 +1,341 @@
+---
+title: "Exploratory Data Analysis"
+subtitle: "MSDS 6372: Jacob Turner"
+author: "Isabella Westlauer"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+# Relationships between Predictors and Target Variable and Among Predictors
+The following analysis explores the relationships between the predictors and the target variable, as well as the relationships among the predictors themselves. This will help identify potential multicollinearity issues and inform feature selection for predictive modeling.
+
+## Ingest
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+# library(ggplot2)
+# library(dplyr)
+# library(tidyr)
+library(scales)
+library(car) # for variance inflation factor (VIF) calculation
+
+# Apply custom theme to all ggplots
+source("project_theme.R")
+theme_set(theme_bank())
+
+bank_add <- read.csv("../Data/bank-additional-full.csv", sep = ";")
+# bank_full <- read.csv("../Data/bank-full.csv", sep = ";")
+```
+
+## Tables of Categorical Predictors vs Target Variable
+
+```{r}
+# Identify categorical predictors
+cat_vars <- bank_add %>%
+  select(where(~ is.factor(.) | is.character(.))) %>%
+  select(-any_of("y")) %>%
+  names()
+
+# Create a contingency table for each categorical predictor and the target variable
+for (var in cat_vars) {
+  print(table(bank_add[[var]], bank_add$y))
+}
+```
+
+## Plots of Categorical Predictors vs Target Variable
+
+```{r}
+# make sure the months are in order
+month_levels <- c(
+  "jan", "feb", "mar", "apr", "may", "jun",
+  "jul", "aug", "sep", "oct", "nov", "dec"
+)
+
+for (var in cat_vars) {
+
+  p <- ggplot(
+    bank_add,
+    aes(x = .data[[var]], fill = y)
+  ) +
+    geom_bar(
+      position = "fill",
+      width = 0.7,
+      color = "white"
+    ) +
+    scale_fill_manual(
+      values = subscription_colors,
+      labels = c(
+        "no" = "Not Subscribed",
+        "yes" = "Subscribed"
+      ),
+      name = NULL
+    ) +
+    scale_y_continuous(
+      labels = percent_format()
+    ) +
+    coord_flip() +
+    labs(
+      title = paste("Subscription Status by", var),
+      subtitle = "Distribution of subscription outcomes",
+      x = NULL,
+      y = "Percentage of Customers"
+    ) +
+    theme(
+      panel.grid.major.y = element_blank()
+    )
+
+  print(p)
+}
+```
+
+## GLM Plots of Numerical Predictors vs Target Variable
+These plots show the relationship between each numerical predictor and the probability of subscription. The logistic regression curve (in coral) provides a parametric fit, while the jittered points show the distribution of subscription outcomes for each predictor value.
+
+```{r}
+# Identify numerical predictors
+num_vars <- bank_add %>%
+  select(where(is.numeric)) %>%
+  names()
+
+# Binary response for plotting
+bank_add <- bank_add %>%
+  mutate(y_num = as.integer(y == "yes"))
+
+for (var in num_vars) {
+  p <- ggplot(bank_add,
+              aes(x = .data[[var]], y = y_num)) +
+    geom_jitter(
+      height = 0.05,
+      width = 0,
+      alpha = 0.15,
+        color = bank_colors["slate"]
+    ) +
+    geom_smooth(
+      method = "glm",
+      method.args = list(family = "binomial"),
+      se = TRUE,
+      color = bank_colors["coral"]
+    ) +
+    labs(
+      title = paste("Subscription Probability vs.", var),
+      x = var,
+      y = "Probability of Subscription"
+    ) +
+    theme_bank()
+
+  print(p)
+}
+```
+
+## Compare Loess and Logistic Regression Fits
+The loess curve helps us discover potential non-linear relationships between the numerical predictors and the target variable. The logistic regression curve provides a parametric fit that can be used for prediction. By comparing these two curves, we can assess whether a linear model is appropriate or if a more flexible model may be needed.
+
+```{r}
+for (var in num_vars) {
+
+  p <- ggplot(bank_add,
+              aes(x = .data[[var]], y = y_num)) +
+
+    geom_jitter(
+      height = 0.05,
+      alpha = 0.1,
+      color = bank_colors["light_blue"]
+    ) +
+
+    # LOESS curve
+    geom_smooth(
+      aes(color = "LOESS"),
+      method = "loess",
+      se = FALSE,
+      span = 0.75
+    ) +
+
+    # Logistic regression curve
+    geom_smooth(
+      aes(color = "Logistic Regression"),
+      method = "glm",
+      method.args = list(family = "binomial"),
+      se = FALSE
+    ) +
+
+    scale_color_manual(
+      name = "Model",
+      values = c(
+        "LOESS" = unname(bank_colors["slate"]),
+        "Logistic Regression" = unname(bank_colors["coral"])
+      )
+    ) +
+
+    labs(
+      title = paste("LOESS vs. Logistic Regression:", var),
+      x = var,
+      y = "Subscription Probability"
+    ) +
+
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_bank()
+
+  print(p)
+}
+
+```
+
+## Interactions Between Predictors
+A correlation heatmap was used to assess pairwsie relationships between numerical predictors. The correlation heatmap shows strong positive correlations between `euribor3m` and `emp.var.rate`, as well as between `euribor3m` and `nr.employed`. This suggests that these predictors may be redundant and could potentially introduce multicollinearity in a predictive model.
+
+We may find `poutcome` and `pdays` to have some multicollinearity later, but for EDA we can't tell if this is a problem yet. Remember that `pdays` has a large number of 999 values, indicating that the client was not previously contacted. This may need to be treated as a categorical variable or imputed in some way.
+
+```{r}
+cor_mat <- bank_add %>%
+  select(all_of(num_vars)) %>%
+  cor(use = "pairwise.complete.obs")
+
+cor_long <- as.data.frame(as.table(cor_mat)) %>%
+  rename(Var1 = Var1, Var2 = Var2, Correlation = Freq)
+
+# Keep only upper triangle
+cor_long$Var1 <- factor(cor_long$Var1, levels = colnames(cor_mat))
+cor_long$Var2 <- factor(cor_long$Var2, levels = colnames(cor_mat))
+
+cor_long <- cor_long %>%
+  filter(as.numeric(Var1) < as.numeric(Var2))
+
+ggplot(cor_long, aes(x = Var1, y = Var2, fill = Correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Correlation, 2)), size = 3) +
+  scale_fill_gradient2(
+    low = bank_colors["blue"],
+    mid = "white",
+    high = bank_colors["coral"],
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "Correlation"
+  ) +
+  labs(
+    title = "Correlation Heatmap of Numeric Predictors",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_bank() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+```
+
+## Variance Inflation Factor (VIF)
+Check VIF for a basic logistic regression model
+During multicollinearity diagnostics, the full logistic regression model showed aliasing (perfect multicollinearity) between the dummy variables representing unknown housing loan status and unknown personal loan status. These two indicator variables were identical across all observations used in the model, so they can be considered redundant.
+
+```{r}
+# Fit logistic regression with all candidate predictors:
+# numeric y against everything but the original y
+full_model <- glm(
+  y_num ~ . - y, 
+  data = bank_add,
+  family = binomial
+)
+
+# Check model
+summary(full_model)
+alias(full_model)$Complete 
+# loanunknown and housingunknown are aliased, so one of them should be removed from the model.
+```
+
+The model with loan removed shows some high VIF values, particularly for `nr.employed`,`euribor3m` and `emp.var.rate`, which are highly correlated. This suggests that these predictors may be redundant and could potentially introduce multicollinearity in a predictive model.
+```{r}
+full_model_no_loan <- glm(
+  y_num ~ . - y - loan, 
+  data = bank_add,
+  family = binomial
+)
+
+# summary(full_model_no_loan)
+
+vif(full_model_no_loan)
+```
+
+## Polished VIF View
+Note on df adjustment: For a categorical variable with k levels, the degrees of freedom (df) is k-1. The GVIF is adjusted by taking the (1/(2*df)) root to make it comparable across variables with different df. The VIF equivalent is then calculated as the square of the adjusted GVIF. This allows for a more interpretable measure of multicollinearity that accounts for the number of levels in categorical predictors.
+
+```{r}
+# library(tibble)
+
+vif_results <- vif(full_model_no_loan)
+
+if (is.matrix(vif_results)) {
+
+  vif_table <- as.data.frame(vif_results) %>%
+    rownames_to_column("Predictor") %>%
+    transmute(
+      Predictor,
+      GVIF = GVIF,
+      Df = Df,
+      Adjusted_GVIF = GVIF^(1 / (2 * Df)),
+      VIF_Equivalent = Adjusted_GVIF^2
+    )
+
+} else {
+
+  vif_table <- tibble(
+    Predictor = names(vif_results),
+    GVIF = as.numeric(vif_results),
+    Df = 1,
+    Adjusted_GVIF = sqrt(GVIF),
+    VIF_Equivalent = GVIF
+  )
+
+}
+
+library(gt)
+
+vif_table <- vif_table %>%
+  mutate(
+    Concern = case_when(
+      VIF_Equivalent < 5 ~ "Low",
+      VIF_Equivalent < 10 ~ "Moderate",
+      TRUE ~ "High"
+    )
+  ) %>%
+  arrange(desc(VIF_Equivalent))
+
+vif_table %>%
+  gt() %>%
+  tab_header(
+    title = "Multicollinearity Diagnostics",
+    subtitle = "Full Logistic Regression Model"
+  ) %>%
+  cols_label(
+    Predictor = "Predictor",
+    GVIF = "GVIF",
+    Df = "Df",
+    Adjusted_GVIF = "Adjusted GVIF",
+    VIF_Equivalent = "GVIF-Based VIF",
+    Concern = "Concern Level"
+  ) %>%
+  fmt_number(
+    columns = c(GVIF, Adjusted_GVIF, VIF_Equivalent),
+    decimals = 2
+  ) %>%
+  data_color(
+    columns = VIF_Equivalent,
+    palette = c("#D9E2E8", "#E07A5F")
+  ) %>%
+  tab_options(
+    table.font.size = 12,
+    heading.title.font.size = 18,
+    heading.subtitle.font.size = 12,
+    column_labels.font.weight = "bold"
+  )
+
+
+```
