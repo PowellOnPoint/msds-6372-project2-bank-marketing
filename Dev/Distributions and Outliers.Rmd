@@ -1,0 +1,206 @@
+---
+title: "Exploratory Data Analysis"
+subtitle: "MSDS 6372: Jacob Turner"
+author: "Isabella Westlauer"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## EDA Objective
+Start EDA with the distribution of the target variable, `y`, and then move on to the distribution of the predictors. Inspect dataset for missing values and outliers. Preview correlation between the predictors and the target variable.
+
+## Ingest
+EDA is on the `bank-additional-full.csv` dataset, which contains all examples, ordered by date (from May 2008 to November 2010). The dataset has 41,188 rows and 21 columns. The target variable is `y`, which indicates whether the client subscribed to a term deposit. The predictors include both numerical and categorical variables, such as age, job, marital status, education, default, balance, housing loan, personal loan, contact communication type, day of the week, month of contact, duration of the call, number of contacts performed during this campaign and for this client (numeric), number of days since the client was last contacted from a previous campaign (numeric), number of contacts performed before this campaign and for this client (numeric), outcome of the previous marketing campaign (categorical), employment variation rate (numeric), consumer price index (numeric), consumer confidence index (numeric), euribor 3 month rate (numeric), and number of employees (numeric).
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+bank_add <- read.csv("../Data/bank-additional-full.csv", sep = ";")
+# bank_full <- read.csv("../Data/bank-full.csv", sep = ";")
+```
+
+
+## Distribution of Response
+The distribution of the response variable `y` is shown below. The majority of the observations are "no" (not subscribed), with a smaller proportion of "yes" (subscribed). This indicates that the dataset is imbalanced, which may affect the performance of predictive models.
+```{r}
+# Distribution of y
+table(bank_add$y)
+ggplot(bank_add, aes(x = y)) +
+  geom_bar() +
+  labs(title = "Distribution of Target Variable", x = "Target", y = "Count")
+```
+
+## Distributions of Numerical Predictors
+```{r}
+# Identify numerical predictors
+num_vars <- bank_add %>%
+  select(where(is.numeric)) %>%
+  names()
+
+# Convert to long format for faceting
+bank_long <- bank_add %>%
+  select(all_of(num_vars)) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Predictor",
+    values_to = "Value"
+  )
+
+# Plot distributions
+ggplot(bank_long, aes(x = Value)) +
+  geom_histogram(
+    bins = 30,
+    fill = "steelblue",
+    color = "white"
+  ) +
+  facet_wrap(~ Predictor, scales = "free", ncol = 3) +
+  labs(
+    title = "Distributions of Numerical Predictors",
+    x = "Value",
+    y = "Frequency"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+## Five Number Summary of Numerical Predictors
+```{r}
+# Create a five-number summary table for all numerical predictors
+five_num_summary <- data.frame(
+  Variable = num_vars,
+  t(sapply(bank_add[num_vars], fivenum))
+)
+
+# Rename columns
+colnames(five_num_summary) <- c(
+  "Variable", "Min", "Q1", "Median", "Q3", "Max"
+)
+
+# Display as a formatted table
+knitr::kable(
+  five_num_summary,
+  digits = 2,
+  caption = "Five-Number Summary of Numerical Predictors"
+)
+```
+
+## Density Plots by Subscription Status
+Density Plots grouped by subscription status (`y`) for each numerical predictor. This will help visualize how the distributions differ between those who subscribed and those who did not. The predictors that show potential differences in distribution between the two groups may be more informative for predictive modeling: cons.conf.idx, cons.price.idx, emp.var.rate, euribor3m, nr.employed.
+```{r}
+bank_long <- bank_add %>%
+  select(all_of(num_vars), y) %>%
+  pivot_longer(
+    cols = all_of(num_vars),
+    names_to = "Predictor",
+    values_to = "Value"
+  )
+
+ggplot(bank_long, aes(x = Value, fill = y)) +
+  geom_density(alpha = 0.4, na.rm = TRUE) +
+  facet_wrap(~ Predictor, scales = "free", ncol = 3) +
+  labs(
+    title = "Predictor Distributions by Subscription Status",
+    x = "Value",
+    y = "Density",
+    fill = "Subscribed"
+  ) +
+  theme_minimal()
+```
+
+
+## Faceted Bar Charts for Categorical Predictors
+Faceted bar charts for categorical predictors: notice that many predictors have 'unknown' as a category, which may need to be addressed in the cleaning process.
+```{r}
+# Identify categorical predictors
+cat_vars <- bank_add %>%
+  select(where(~ is.factor(.) | is.character(.))) %>%
+  select(-any_of("y")) %>%
+  names()
+
+# Convert to long format
+bank_cat_long <- bank_add %>%
+  select(all_of(cat_vars)) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Predictor",
+    values_to = "Category"
+  )
+
+# Plot categorical predictor distributions
+ggplot(bank_cat_long, aes(x = Category)) +
+  geom_bar(fill = "steelblue", alpha = 0.8) +
+  facet_wrap(~ Predictor, scales = "free", ncol = 3) +
+  labs(
+    title = "Distributions of Categorical Predictors",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(
+    strip.text = element_text(face = "bold"),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+
+## Boxplots to examine outliers
+Balance, campaign, duration, pdays, and previous are all heavily right-skewed, with many outliers. The boxplots below show the distribution of these numerical predictors by subscription status (`y`).
+```{r}
+ggplot(bank_long, aes(x = y, y = Value, fill = y)) +
+  geom_boxplot(alpha = 0.7, outlier.alpha = 0.3) +
+  facet_wrap(~ Predictor, scales = "free_y", ncol = 3) +
+  labs(
+    title = "Numerical Predictors by Subscription Status",
+    x = "Subscribed",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Missing or Unknown Values
+There are no missing values in the dataset. However, **default, education, housing, loan, job, and marital** have "unknown" values. The table below shows the proportion of unknown values for each predictor. This will help identify which predictors may need to be cleaned or imputed.
+
+```{r}
+# look for missing values in the dataset
+sum(is.na(bank_add))
+
+# look for unknown values in the dataset
+sum(bank_add == "unknown") / sum(bank_add != "unknown")
+
+# breakdown the proportion of unknown values by predictor
+unknown_summary <- bank_add %>%
+  summarise(across(everything(), ~ sum(. == "unknown") / n())) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "Predictor",
+    values_to = "Proportion_Unknown"
+  ) %>%
+  arrange(desc(Proportion_Unknown))
+
+# Display results
+knitr::kable(
+  unknown_summary,
+  digits = 3,
+  caption = "Proportion of Unknown Values by Predictor"
+)
+```
