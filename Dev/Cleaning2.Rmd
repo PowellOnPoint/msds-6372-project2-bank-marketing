@@ -1,0 +1,571 @@
+---
+title: "Extract comparison: bank-full and bank-additional-full"
+subtitle: "MSDS 6372: Jacob Turner"
+author: "Aaron Powell"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    df_print: paged
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Purpose
+
+This notebook compares `bank-full.csv` and `bank-additional-full.csv` before either extract is used for modeling. The sample unit in both files is a telephone contact. The binary response `y` records whether the client subscribed to a term deposit after that contact. Neither file contains a client identifier, so the same client can contribute more than one row.
+
+Objective 1 fits an additive logistic regression for interpretation on the training data. Objective 2 compares that fit with competing classifiers on one validation set. The proposal under consideration assigns `bank-additional-full.csv` to objective 2 and `bank-full.csv` to objective 1. That proposal puts the two objectives on different samples. The checks below are the evidence that proposal has to answer.
+
+```{r ingest}
+library(tidyverse)
+library(knitr)
+source("project_theme.r")
+
+bank_full <- read.csv("../Data/bank-full.csv", sep = ";")
+bank_add <- read.csv("../Data/bank-additional-full.csv", sep = ";")
+bank_small <- read.csv("../Data/bank.csv", sep = ";")
+bank_add_small <- read.csv("../Data/bank-additional.csv", sep = ";")
+
+month_levels <- c(
+  "jan", "feb", "mar", "apr", "may", "jun",
+  "jul", "aug", "sep", "oct", "nov", "dec"
+)
+```
+
+## Column inventory
+
+`bank-full.csv` has `r nrow(bank_full)` rows and `r ncol(bank_full)` columns. `bank-additional-full.csv` has `r nrow(bank_add)` rows and `r ncol(bank_add)` columns. The difference in row counts is `r nrow(bank_full) - nrow(bank_add)`.
+
+```{r column-sets}
+tibble(
+  only_in_bank_full = list(setdiff(names(bank_full), names(bank_add))),
+  only_in_bank_additional_full = list(setdiff(names(bank_add), names(bank_full))),
+  shared_names = list(intersect(names(bank_full), names(bank_add)))
+) %>%
+  pivot_longer(everything(), names_to = "set", values_to = "columns") %>%
+  unnest(columns)
+```
+
+`balance` and `day` are present only in `bank-full.csv`. `day` is the day of the month. `day_of_week` and the five macroeconomic indicators are present only in `bank-additional-full.csv`. A shared column name is not evidence of a shared measurement. Education, `pdays`, `poutcome`, and `contact` use different codes in the two extracts.
+
+## Missing values
+
+### NA cells and blank strings
+
+Neither extract contains an NA cell or a blank string. The `bank-full` names file reports no missing attribute values. That report matches the NA count. The `bank-additional-full` names file states that missing categorical values are stored as the level `unknown`.
+
+```{r na-and-blank}
+na_blank <- tibble(
+  extract = c("bank-full", "bank-additional-full"),
+  n_rows = c(nrow(bank_full), nrow(bank_add)),
+  na_cells = c(sum(is.na(bank_full)), sum(is.na(bank_add))),
+  blank_cells = c(sum(bank_full == ""), sum(bank_add == ""))
+)
+kable(na_blank)
+```
+
+### The level `unknown`
+
+`unknown` is a recorded category. The table gives the count and the sample proportion in each extract. A proportion of zero means the level is absent.
+
+```{r unknown-levels}
+unknown_inventory <- function(df, extract_name) {
+  char_names <- names(df)[vapply(df, is.character, logical(1))]
+  bind_rows(lapply(char_names, function(variable) {
+    n_unknown <- sum(df[[variable]] == "unknown")
+    tibble(
+      extract = extract_name,
+      variable = variable,
+      n = nrow(df),
+      n_unknown = n_unknown,
+      proportion = n_unknown / nrow(df)
+    )
+  }))
+}
+
+unknown_levels <- bind_rows(
+  unknown_inventory(bank_full, "bank-full"),
+  unknown_inventory(bank_add, "bank-additional-full")
+) %>%
+  filter(n_unknown > 0) %>%
+  arrange(variable, extract)
+
+kable(unknown_levels, digits = 3)
+```
+
+In `bank-additional-full`, `housing == "unknown"` and `loan == "unknown"` mark the same rows. The two labels are one missingness pattern.
+
+```{r housing-loan-unknown}
+bank_add %>%
+  count(
+    housing_unknown = housing == "unknown",
+    loan_unknown = loan == "unknown"
+  ) %>%
+  kable()
+```
+
+In `bank-full`, `contact == "unknown"` is concentrated in May and June. The level tracks the campaign calendar. It is not a candidate for a missing-at-random imputation that ignores month.
+
+```{r contact-unknown-by-month}
+contact_unknown_month <- bank_full %>%
+  group_by(month) %>%
+  summarise(
+    n = n(),
+    n_unknown = sum(contact == "unknown"),
+    proportion_unknown = n_unknown / n,
+    .groups = "drop"
+  ) %>%
+  mutate(month = factor(month, levels = month_levels)) %>%
+  arrange(month)
+
+kable(contact_unknown_month, digits = 3)
+```
+
+`poutcome == "unknown"` in `bank-full`, and `poutcome == "nonexistent"` in `bank-additional-full`, mark contacts with no prior campaign. Those levels are part of the design of the campaign history. Imputing them as `failure` or `success` would invent a prior outcome.
+
+### Sentinels for a prior contact
+
+```{r prior-contact-sentinels}
+sentinel_n <- function(condition) sum(condition)
+
+sentinel_checks <- tibble(
+  check = c(
+    "bank-full: pdays == -1",
+    "bank-full: previous == 0",
+    "bank-full: pdays == -1 and previous == 0",
+    "bank-full: pdays == -1 and previous > 0",
+    "bank-full: pdays != -1 and previous == 0",
+    "bank-full: poutcome == unknown and previous > 0",
+    "bank-additional-full: pdays == 999",
+    "bank-additional-full: previous == 0",
+    "bank-additional-full: poutcome == nonexistent",
+    "bank-additional-full: pdays == 999 and previous == 0",
+    "bank-additional-full: pdays == 999 and previous > 0",
+    "bank-additional-full: pdays != 999 and previous == 0",
+    "bank-additional-full: poutcome == nonexistent and previous > 0"
+  ),
+  n = c(
+    sentinel_n(bank_full$pdays == -1),
+    sentinel_n(bank_full$previous == 0),
+    sentinel_n(bank_full$pdays == -1 & bank_full$previous == 0),
+    sentinel_n(bank_full$pdays == -1 & bank_full$previous > 0),
+    sentinel_n(bank_full$pdays != -1 & bank_full$previous == 0),
+    sentinel_n(bank_full$poutcome == "unknown" & bank_full$previous > 0),
+    sentinel_n(bank_add$pdays == 999),
+    sentinel_n(bank_add$previous == 0),
+    sentinel_n(bank_add$poutcome == "nonexistent"),
+    sentinel_n(bank_add$pdays == 999 & bank_add$previous == 0),
+    sentinel_n(bank_add$pdays == 999 & bank_add$previous > 0),
+    sentinel_n(bank_add$pdays != 999 & bank_add$previous == 0),
+    sentinel_n(bank_add$poutcome == "nonexistent" & bank_add$previous > 0)
+  )
+)
+kable(sentinel_checks)
+```
+
+In `bank-full`, `pdays == -1` and `previous == 0` are the same set of rows. The names file defines `-1` as no prior contact, and the cross-check agrees.
+
+In `bank-additional-full`, `previous == 0` and `poutcome == "nonexistent"` are the same set of rows. `pdays == 999` contains that set and an additional set of rows with `previous > 0`. The names file defines `999` as no prior contact. The cross-check does not agree: `999` also marks prior contacts whose day count was not recorded. A binary indicator built from `pdays == 999` therefore mixes two states. `previous == 0` is the indicator that matches `poutcome`.
+
+The numeric values of `pdays`, on rows that are not sentinels, occupy different ranges. A coefficient on `pdays` does not refer to the same measurement in the two extracts.
+
+```{r pdays-ranges}
+pdays_range <- function(x, sentinel) {
+  observed <- x[x != sentinel]
+  tibble(
+    n_sentinel = sum(x == sentinel),
+    n_observed = length(observed),
+    min = min(observed),
+    q1 = unname(quantile(observed, 0.25)),
+    median = median(observed),
+    mean = mean(observed),
+    q3 = unname(quantile(observed, 0.75)),
+    max = max(observed)
+  )
+}
+
+bind_rows(
+  pdays_range(bank_full$pdays, sentinel = -1) %>% mutate(extract = "bank-full", .before = 1),
+  pdays_range(bank_add$pdays, sentinel = 999) %>% mutate(extract = "bank-additional-full", .before = 1)
+) %>%
+  kable(digits = 1)
+```
+
+## Exact duplicate rows
+
+`bank-full` contains `r sum(duplicated(bank_full))` extra copies of a row. Every row is distinct. `bank-additional-full` contains `r sum(duplicated(bank_add))` extra copies. Those copies form `r nrow(bank_add %>% filter(duplicated(.) | duplicated(., fromLast = TRUE)))` rows and `r sum(duplicated(bank_add))` duplicated records, so each duplicated record appears twice.
+
+```{r duplicate-groups}
+duplicate_groups <- bank_add %>%
+  count(across(everything()), name = "copies") %>%
+  filter(copies > 1) %>%
+  select(copies, age, job, marital, education, month, duration, campaign, previous, pdays, y)
+
+kable(duplicate_groups)
+```
+
+An exact copy can fall in the training sample and again in the validation sample under a row-wise split. Drop the `r sum(duplicated(bank_add))` extra copies before splitting `bank-additional-full`. The change in sample size is those `r sum(duplicated(bank_add))` rows.
+
+This check does not identify repeated contacts to the same client. Campaign, `previous`, and `pdays` describe that repetition, and neither extract has a client key. A random split can still place two different contacts to one client on opposite sides of the split. The resulting validation metrics then describe partly dependent rows.
+
+## Coding of shared names
+
+```{r level-inventory}
+shared_categorical <- c(
+  "job", "marital", "education", "default", "housing", "loan",
+  "contact", "month", "poutcome", "y"
+)
+
+level_counts <- function(df, extract_name) {
+  bind_rows(lapply(shared_categorical, function(variable) {
+    tibble(level = as.character(df[[variable]])) %>%
+      count(level, name = "n") %>%
+      mutate(variable = variable, extract = extract_name, .before = 1)
+  }))
+}
+
+level_inventory <- bind_rows(
+  level_counts(bank_full, "n_full"),
+  level_counts(bank_add, "n_add")
+) %>%
+  pivot_wider(names_from = extract, values_from = n, values_fill = 0) %>%
+  mutate(
+    calendar_order = if_else(variable == "month", match(level, month_levels), NA_integer_)
+  ) %>%
+  arrange(variable, calendar_order, level) %>%
+  select(-calendar_order)
+
+kable(level_inventory)
+```
+
+`job` uses the same twelve levels in both extracts. `y` uses `yes` and `no` in both extracts.
+
+`education` shares only the level `unknown`. The other levels are disjoint. These files contain no row key that identifies a recode from one education coding to the other.
+
+`marital`, `default`, `housing`, and `loan` include `unknown` only in `bank-additional-full`. `contact` includes `unknown` only in `bank-full`. `poutcome` uses `unknown` and `other` in `bank-full`, and `nonexistent` in `bank-additional-full`.
+
+`month` in `bank-full` includes January and February. Those two months contain `r sum(bank_full$month %in% c("jan", "feb"))` rows. `bank-additional-full` contains neither month. Shared months also differ in row count, so January and February do not explain the difference of `r nrow(bank_full) - nrow(bank_add)` rows as a deletion of two months.
+
+`default == "yes"` occurs in `r sum(bank_full$default == "yes")` rows of `bank-full`, and `r sum(bank_full$default == "yes" & bank_full$y == "yes")` of those rows subscribe. The same level occurs in `r sum(bank_add$default == "yes")` rows of `bank-additional-full`, and `r sum(bank_add$default == "yes" & bank_add$y == "yes")` of those rows subscribe. A logistic dummy for `default == "yes"` in the additional extract is constant on the outcome. The maximum likelihood estimate of that log-odds coefficient is not finite.
+
+`education == "illiterate"` occurs in `r sum(bank_add$education == "illiterate")` rows of `bank-additional-full`. A coefficient for that level will have a large standard error.
+
+```{r shared-numeric}
+numeric_summary <- function(x) {
+  tibble(
+    n = length(x),
+    min = min(x),
+    q1 = unname(quantile(x, 0.25)),
+    median = median(x),
+    mean = mean(x),
+    q3 = unname(quantile(x, 0.75)),
+    max = max(x)
+  )
+}
+
+shared_numeric <- c("age", "duration", "campaign", "previous")
+
+bind_rows(lapply(shared_numeric, function(variable) {
+  bind_rows(
+    numeric_summary(bank_full[[variable]]) %>% mutate(extract = "bank-full"),
+    numeric_summary(bank_add[[variable]]) %>% mutate(extract = "bank-additional-full")
+  ) %>%
+    mutate(variable = variable, .before = 1)
+})) %>%
+  kable(digits = 1)
+```
+
+`duration` has the same minimum, quartiles, and maximum in both extracts. That agreement is a property of call length. It is not a row match. The next section counts matches directly.
+
+`previous` in `bank-full` has a long right tail. The maximum in `bank-additional-full` is `r max(bank_add$previous)`. A linear term in `previous` on `bank-full` is sensitive to the tail, including one contact with `previous` equal to `r max(bank_full$previous)`.
+
+```{r previous-tail}
+bank_full %>%
+  mutate(
+    previous_bin = cut(
+      previous,
+      breaks = c(-Inf, 0, 1, 2, 3, 7, 20, Inf),
+      right = TRUE
+    )
+  ) %>%
+  count(previous_bin, name = "n") %>%
+  kable()
+
+bank_full %>%
+  filter(previous >= 50) %>%
+  select(age, job, month, campaign, pdays, previous, poutcome, duration, balance, y) %>%
+  kable()
+```
+
+`balance` is present only in `bank-full`. The variable is observed before the call. It takes negative values, so a linear logit coefficient is a change in log odds per euro across both negative and positive balances.
+
+```{r balance-summary}
+tibble(
+  n = nrow(bank_full),
+  n_negative = sum(bank_full$balance < 0),
+  n_zero = sum(bank_full$balance == 0),
+  min = min(bank_full$balance),
+  q1 = unname(quantile(bank_full$balance, 0.25)),
+  median = median(bank_full$balance),
+  mean = mean(bank_full$balance),
+  q3 = unname(quantile(bank_full$balance, 0.75)),
+  max = max(bank_full$balance)
+) %>%
+  kable(digits = 1)
+```
+
+`duration == 0` occurs in `r sum(bank_full$duration == 0)` rows of `bank-full` and `r sum(bank_add$duration == 0)` rows of `bank-additional-full`. Every one of those rows has `y == "no"`. The additional-extract names file states that `duration` should be discarded when the model is meant to predict before the call ends, because `duration` is known only at the end of the call and `y` is known then as well.
+
+```{r duration-zero}
+bind_rows(
+  bank_full %>%
+    filter(duration == 0) %>%
+    transmute(extract = "bank-full", age, job, month, campaign, previous, pdays, poutcome, y),
+  bank_add %>%
+    filter(duration == 0) %>%
+    transmute(extract = "bank-additional-full", age, job, month, campaign, previous, pdays, poutcome, y)
+) %>%
+  kable()
+```
+
+## Subscription proportions
+
+The sample subscription proportion in `bank-full` is \(\hat p = `r round(mean(bank_full$y == "yes"), 4)`\) with \(n = `r nrow(bank_full)`\). The binomial standard error is \(\sqrt{\hat p(1-\hat p)/n} = `r round(sqrt(mean(bank_full$y == "yes") * (1 - mean(bank_full$y == "yes")) / nrow(bank_full)), 4)`\).
+
+The sample subscription proportion in `bank-additional-full` is \(\hat p = `r round(mean(bank_add$y == "yes"), 4)`\) with \(n = `r nrow(bank_add)`\). The binomial standard error is `r round(sqrt(mean(bank_add$y == "yes") * (1 - mean(bank_add$y == "yes")) / nrow(bank_add)), 4)`.
+
+The difference in sample proportions, `bank-full` minus `bank-additional-full`, is `r round(mean(bank_full$y == "yes") - mean(bank_add$y == "yes"), 4)`. A standard error that treats the extracts as independent samples is not a standard error for this contrast. The extracts are not independent samples, and the next section does not identify their overlap.
+
+The binomial standard error treats contacts as independent Bernoulli trials. Repeated contacts to one client are not identifiable. This standard error can understate the variance of the sample proportion.
+
+```{r month-rates}
+month_rates <- bind_rows(
+  bank_full %>% mutate(extract = "bank-full"),
+  bank_add %>% mutate(extract = "bank-additional-full")
+) %>%
+  mutate(month = factor(month, levels = month_levels)) %>%
+  group_by(extract, month) %>%
+  summarise(
+    n = n(),
+    subscriptions = sum(y == "yes"),
+    p = subscriptions / n,
+    se = sqrt(p * (1 - p) / n),
+    .groups = "drop"
+  ) %>%
+  arrange(extract, month)
+
+kable(month_rates, digits = 3)
+```
+
+March, September, October, and December have high subscription proportions and small contact counts in both extracts. May has the largest contact count and a low subscription proportion in both extracts. January and February appear only in `bank-full`.
+
+```{r month-count-plot, fig.width=8, fig.height=4.5}
+ggplot(month_rates, aes(month, n, fill = extract)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  scale_y_continuous(labels = scales::comma) +
+  scale_fill_manual(values = c(
+    "bank-full" = "#253746",
+    "bank-additional-full" = "#298C81"
+  )) +
+  labs(
+    title = "Contacts by month",
+    x = NULL,
+    y = "Contacts",
+    fill = NULL
+  ) +
+  theme_bank()
+```
+
+```{r month-rate-plot, fig.width=8, fig.height=4.5}
+dodge <- position_dodge(width = 0.45)
+
+ggplot(month_rates, aes(month, p, color = extract, group = extract)) +
+  geom_errorbar(
+    aes(ymin = p - se, ymax = p + se),
+    width = 0.2,
+    position = dodge
+  ) +
+  geom_line(position = dodge) +
+  geom_point(position = dodge, size = 2) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_color_manual(values = c(
+    "bank-full" = "#253746",
+    "bank-additional-full" = "#298C81"
+  )) +
+  labs(
+    title = "Subscription proportion by contact month",
+    subtitle = "Intervals are plus or minus one binomial standard error",
+    x = NULL,
+    y = "Subscription proportion",
+    color = NULL
+  ) +
+  theme_bank()
+```
+
+## Row overlap
+
+The candidate key is `age`, `job`, `month`, `duration`, and `campaign`. Those fields share codes across the extracts. Education, `pdays`, `poutcome`, `contact`, and the calendar fields do not. The key is not unique inside either extract, so the comparison keeps only keys that occur once in each file.
+
+```{r row-overlap}
+match_key <- c("age", "job", "month", "duration", "campaign")
+
+full_keys <- bank_full %>%
+  group_by(across(all_of(match_key))) %>%
+  summarise(n_full = n(), .groups = "drop")
+
+add_keys <- bank_add %>%
+  group_by(across(all_of(match_key))) %>%
+  summarise(n_add = n(), .groups = "drop")
+
+matched_keys <- inner_join(full_keys, add_keys, by = match_key)
+one_to_one_keys <- matched_keys %>% filter(n_full == 1, n_add == 1)
+
+paired <- bank_full %>%
+  inner_join(one_to_one_keys %>% select(all_of(match_key)), by = match_key) %>%
+  inner_join(bank_add, by = match_key, suffix = c("_full", "_add"))
+
+overlap_summary <- tibble(
+  quantity = c(
+    "rows in bank-full",
+    "rows in bank-additional-full",
+    "distinct keys in bank-full",
+    "distinct keys in bank-additional-full",
+    "keys present in both extracts",
+    "one-to-one keys",
+    "paired rows"
+  ),
+  n = c(
+    nrow(bank_full),
+    nrow(bank_add),
+    nrow(full_keys),
+    nrow(add_keys),
+    nrow(matched_keys),
+    nrow(one_to_one_keys),
+    nrow(paired)
+  )
+)
+kable(overlap_summary)
+```
+
+One-to-one keys cover `r nrow(paired)` contacts in each extract. That count is `r scales::percent(nrow(paired) / nrow(bank_add), accuracy = 0.1)` of `bank-additional-full` and `r scales::percent(nrow(paired) / nrow(bank_full), accuracy = 0.1)` of `bank-full`.
+
+```{r overlap-agreement}
+compare_columns <- c(
+  "y", "marital", "default", "housing", "loan", "contact", "previous", "poutcome"
+)
+
+agreement <- tibble(
+  column = compare_columns,
+  n_pairs = nrow(paired),
+  n_agree = vapply(compare_columns, function(column) {
+    sum(paired[[paste0(column, "_full")]] == paired[[paste0(column, "_add")]])
+  }, integer(1))
+) %>%
+  mutate(proportion_agree = n_agree / n_pairs)
+
+kable(agreement, digits = 3)
+
+both_recorded <- paired %>%
+  filter(pdays_full != -1, pdays_add != 999)
+
+pdays_alignment <- tibble(
+  check = c(
+    "both coded as no prior contact",
+    "bank-full sentinel and bank-additional-full observed",
+    "bank-additional-full sentinel and bank-full observed",
+    "both observed",
+    "both observed and pdays equal"
+  ),
+  n = c(
+    sum(paired$pdays_full == -1 & paired$pdays_add == 999),
+    sum(paired$pdays_full == -1 & paired$pdays_add != 999),
+    sum(paired$pdays_full != -1 & paired$pdays_add == 999),
+    nrow(both_recorded),
+    sum(both_recorded$pdays_full == both_recorded$pdays_add)
+  )
+)
+kable(pdays_alignment)
+
+p_yes_full <- mean(paired$y_full == "yes")
+p_yes_add <- mean(paired$y_add == "yes")
+y_agreement_independent <- p_yes_full * p_yes_add + (1 - p_yes_full) * (1 - p_yes_add)
+
+tibble(
+  p_yes_full = p_yes_full,
+  p_yes_add = p_yes_add,
+  observed_agreement = mean(paired$y_full == paired$y_add),
+  agreement_if_independent = y_agreement_independent
+) %>%
+  kable(digits = 3)
+```
+
+`poutcome` string agreement is low because the level sets differ. `bank-full` uses `unknown` and `other`. `bank-additional-full` uses `nonexistent`. Equality of the `poutcome` strings is not a test of whether the contacts are the same.
+
+Observed agreement on `y` in the paired subset is `r round(mean(paired$y_full == paired$y_add), 3)`. The agreement expected if the two `y` labels were independent, using the subscription proportions inside this paired subset, is `r round(y_agreement_independent, 3)`. Housing agrees on `r round(agreement$proportion_agree[agreement$column == "housing"], 3)` of the pairs, marital on `r round(agreement$proportion_agree[agreement$column == "marital"], 3)`, and contact on `r round(agreement$proportion_agree[agreement$column == "contact"], 3)`. Among the `r nrow(both_recorded)` pairs with a non-sentinel `pdays` in both extracts, `r sum(both_recorded$pdays_full == both_recorded$pdays_add)` pairs have equal `pdays`. The candidate key does not identify the same contacts. A coefficient from one extract is not a coefficient for the other extract.
+
+## Macroeconomic indicators
+
+`emp.var.rate`, `cons.price.idx`, `cons.conf.idx`, `euribor3m`, and `nr.employed` are present only in `bank-additional-full`. Each indicator is constant across many contacts in the same period. A random row split places the same economic regime in the training sample and the validation sample.
+
+```{r macro-distinct}
+macro_names <- c(
+  "emp.var.rate", "cons.price.idx", "cons.conf.idx", "euribor3m", "nr.employed"
+)
+
+tibble(
+  indicator = macro_names,
+  n_distinct = vapply(bank_add[macro_names], n_distinct, integer(1))
+) %>%
+  kable()
+```
+
+```{r macro-correlation}
+macro_cor <- cor(bank_add[macro_names])
+kable(macro_cor, digits = 3)
+```
+
+`euribor3m` is highly correlated with `emp.var.rate` and with `nr.employed`. An additive logistic regression that enters all five indicators will not separate those three coefficients cleanly. The five-indicator block is the principal-component candidate in this project. The client categoricals in `bank-full` are a different problem: most of them are unordered factors, and a principal component analysis on dummy codes would need its own justification.
+
+## Publisher 10 percent samples
+
+The names files describe `bank.csv` and `bank-additional.csv` as 10 percent samples drawn from the matching full extract. Every row of each small file is an exact row of the matching full file.
+
+```{r publisher-samples}
+tibble(
+  sample = c("bank.csv", "bank-additional.csv"),
+  n_sample = c(nrow(bank_small), nrow(bank_add_small)),
+  rows_absent_from_full = c(
+    nrow(anti_join(bank_small, bank_full, by = names(bank_small))),
+    nrow(anti_join(bank_add_small, bank_add, by = names(bank_add_small)))
+  ),
+  extra_duplicate_rows = c(
+    sum(duplicated(bank_small)),
+    sum(duplicated(bank_add_small))
+  )
+) %>%
+  kable()
+```
+
+A model fit on a full extract and scored on the matching publisher sample is scored on rows that were inside the fitting sample. The validation metrics from that split do not estimate performance on contacts held out of the fit. Draw the training sample and the validation sample from one extract, after dropping the extra duplicate rows, and keep each row in only one of those samples.
+
+## Checks on the proposed split
+
+The proposal assigns `bank-additional-full` to objective 2 and `bank-full` to objective 1. Six facts constrain that proposal.
+
+Objective 2 is scored against the objective 1 model on one validation set. The required metrics are sensitivity, specificity, prevalence, positive predictive value, negative predictive value, and area under the ROC curve. Those metrics, computed on two extracts, describe two samples. A larger area under the ROC curve on `bank-additional-full` does not estimate an improvement over the objective 1 fit.
+
+The macroeconomic block can change predictive metrics, and the same block can confound `month` in an interpretive model. An objective 1 fit on `bank-full` has no measurement of employment, prices, confidence, Euribor, or the employee count. A `month` coefficient from that fit remains open to a regime explanation. March, September, October, and December are the months where that explanation matters, because the subscription proportions there are high and the contact counts are small.
+
+`balance` is known before the call and is present only in `bank-full`. An objective 2 model on `bank-additional-full` cannot use `balance`. `duration` is known when the call ends. A model that includes `duration` answers a question about the completed call. It does not answer the question of whom to contact.
+
+`default == "yes"` is completely separated in `bank-additional-full` (\(n = `r sum(bank_add$default == "yes")`\), subscriptions = `r sum(bank_add$default == "yes" & bank_add$y == "yes")`\)). `pdays` is not the same measurement in the two extracts. `previous` in `bank-full` has a right tail that `bank-additional-full` does not have.
+
+The five macroeconomic indicators are the clear principal-component candidate. That analysis requires `bank-additional-full`. Drop the `r sum(duplicated(bank_add))` extra duplicate rows in that extract before any split.
+
+The presentation describes one data description and one train-validation split. Under that design, both objectives use one extract. Which extract is still open. `bank-additional-full` supplies the macroeconomic block, a separated `default` level, an impure `pdays` sentinel, and `r sum(duplicated(bank_add))` extra duplicate rows. `bank-full` supplies `balance`, a prior-contact coding in which `pdays == -1` matches `previous == 0`, January and February, and a long right tail on `previous`.
