@@ -17,7 +17,7 @@ Project 2/
 │   ├── bank-additional.csv            # 4,119 rows; 10% sample of bank-additional-full.csv
 │   └── bank-additional-names.txt
 ├── Dev/                               # drafts
-├── Docs/                              # pre-production writeups; prompt is local only
+├── Docs/                              # pre-production writeups
 ├── README.md
 └── msds-6372-project2-bank.Rproj
 ```
