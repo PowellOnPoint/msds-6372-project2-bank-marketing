@@ -36,7 +36,7 @@ A Portuguese bank ran telephone campaigns, from May 2008 through November 2010, 
 |---|---:|---:|---|
 | `bank-full.csv` | 45,211 | 17 | Objective 1 |
 | `bank.csv` | 4,521 | 17 | Publisher's 10% sample of `bank-full.csv`. |
-| `bank-additional-full.csv` | 41,188 | 21 | Modeling |
+| `bank-additional-full.csv` | 41,188 | 21 | Objective 2 |
 | `bank-additional.csv` | 4,119 | 21 | Publisher's 10% sample of `bank-additional-full.csv`. |
 
 ## Project status
@@ -45,9 +45,9 @@ A Portuguese bank ran telephone campaigns, from May 2008 through November 2010, 
 |---|---|---|---|---|
 | 1 | Ingest & Tidy | In Progress| Friday, Nov 13, 2026 | Determine train/test split, null/duplicate check, chose dataset, cleaning summary|
 | 2 | Literature Review | Complete | Tuesday, Nov 17, 2026 | Determine theme and expectations, avoid recreating previous work. Added during EDA since Dataset is popular and has several peer reviewed articles |
-| 3 | Exploratory Data Analysis | In Progress | Tuesday, Nov 17, 2026 | Practical vs statistical significance of important factors, plots, PCA determination |
-| 4 | Model: Objective 1 | Not started | Tuesday, Nov 24, 2026 | Additive models. Baseline: one continuous coefficient, one categorical coefficient for Obj 2. Interpretation: more additive terms if necessary, with confidence intervals. AIC determination. |
-| 5 | Model: Objective 2 | Not started |  Tuesday, Dec 1, 2026 | 4-5 models. Complex logistic regression, LDA, QDA, and one nonparametric model. Validation table, threshold, ROC panel, final recommendation. |
+| 3 | Exploratory Data Analysis | Complete | Tuesday, Nov 17, 2026 | Practical vs statistical significance of important factors, plots, PCA determination |
+| 4 | Model: Objective 1 | In Progress| Tuesday, Nov 24, 2026 | Additive models. Baseline: one continuous coefficient, one categorical coefficient for Obj 2. Interpretation: more additive terms if necessary, with confidence intervals. AIC determination. |
+| 5 | Model: Objective 2 | In Progress |  Tuesday, Dec 1, 2026 | 4-5 models. Complex logistic regression, LDA, QDA, and one nonparametric model. Validation table, threshold, ROC panel, final recommendation. |
 | 6 | Communicate | Not started | Thursday, Dec 3, 2026. | Finish slides and r summary. Introduction, EDA, additive model, nonadditive model, model comparison, conclusions. |
 | 7 | Submission | Not started | Monday, 6 December 2026. |  |
 
@@ -65,7 +65,6 @@ Categorical columns arrive as character vectors under R 4.0 and later. Convert a
 
 4. Put draft notebooks in `Dev/` or `Docs/`. Copy a finished R file and the slide deck to the repository root.
 5. Knit an `.Rmd` before pushing the matching HTML.
-
 
 ## Authors
 
